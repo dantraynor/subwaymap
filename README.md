@@ -4,23 +4,18 @@ A modern web application displaying live NYC subway train locations using MTA's 
 
 ## 🚀 Quick Deploy
 
-### Deploy to Railway (Free - Recommended)
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template/D9dJhq)
+### Deploy to Vercel (Recommended)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/dantraynor/subwaymap&branch=clean-deployment)
 
-**Steps:**
-1. Click the Railway button above
+### Deploy to Railway (Alternative)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/dantraynor/subwaymap&branch=clean-deployment)
+
+**Steps for Vercel:**
+1. Click the Vercel button above
 2. Sign in with GitHub
-3. Select this repository (`dantraynor/subwaymap`)
-4. Choose the `clean-deployment` branch
-5. Click "Deploy"
-6. Wait 2-3 minutes for deployment
-7. Your live subway map will be ready!
-
-### Deploy to Render (Free)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/dantraynor/subwaymap&branch=clean-deployment)
-
-### Deploy to Heroku (Free)
-[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/dantraynor/subwaymap/tree/clean-deployment)
+3. Click "Create" to deploy
+4. Wait 2-3 minutes for deployment
+5. Your live subway map will be ready at `https://your-project.vercel.app`!
 
 ---
 
@@ -34,11 +29,26 @@ A modern web application displaying live NYC subway train locations using MTA's 
 - ⚡ **No API key required** - uses free MTA feeds
 - 🌐 **Custom domain support**
 
-## 📸 What It Looks Like
+## 🌐 Connect Your Custom Domain
 
-*Real-time subway map showing live train positions across NYC*
+### After Deploying to Vercel:
 
-## 🔧 Local Development
+1. **Get your Vercel URL** (e.g., `your-project.vercel.app`)
+2. **In your Spaceship DNS settings**, add:
+   ```
+   Type: CNAME
+   Name: subway
+   Value: your-project.vercel.app
+   ```
+3. **In Vercel dashboard**:
+   - Go to your project settings
+   - Click "Domains"
+   - Add `subway.yourdomain.com`
+   - Vercel will verify the DNS automatically
+
+4. **Access your site at**: `subway.yourdomain.com` 🎉
+
+## 🛠️ Local Development
 
 ```bash
 # Clone and setup
@@ -61,12 +71,23 @@ npm run dev
 - `GET /api/mta/feed/:feedId` - Specific line group data
 - `GET /health` - Health check
 
-## 🏠 Project Structure
+### Available Feed IDs:
+- `1234567` - Lines 1,2,3,4,5,6,7
+- `ace` - Lines A,C,E
+- `bdfm` - Lines B,D,F,M
+- `g` - Line G
+- `jz` - Lines J,Z
+- `l` - Line L
+- `nqrw` - Lines N,Q,R,W
+- `si` - Staten Island Railway
+
+## 🏗️ Project Structure
 
 ```
 subwaymap/
 ├── server.js              # Express server with API
 ├── package.json           # Dependencies
+├── vercel.json            # Vercel configuration
 ├── public/
 │   ├── index.html         # Main webpage
 │   ├── style.css          # Styling
@@ -74,39 +95,20 @@ subwaymap/
 └── README.md              # This file
 ```
 
-## 🌍 Custom Domain Setup
-
-### Connect Your Spaceship Domain:
-
-1. **Deploy to Railway** (or another host)
-2. **Get your Railway URL** (e.g., `your-app.up.railway.app`)
-3. **In Spaceship DNS settings**, add:
-   ```
-   Type: CNAME
-   Name: subway
-   Value: your-app.up.railway.app
-   ```
-4. **Access at**: `subway.yourdomain.com`
-
-### Alternative Subdomain Examples:
-- `trains.yourdomain.com`
-- `mta.yourdomain.com`  
-- `realtime.yourdomain.com`
-
 ## 🔧 Technologies Used
 
 - **Backend**: Node.js, Express.js
 - **Frontend**: Vanilla JavaScript, HTML5, CSS3
 - **Map**: Leaflet.js
 - **Data**: MTA GTFS-realtime feeds
-- **Deployment**: Railway, Render, Heroku
+- **Deployment**: Vercel, Railway
 
 ## 📈 Performance
 
 - **Fast loading**: ≈ 2-3 seconds initial load
 - **Real-time updates**: 30-second refresh cycle
 - **Mobile optimized**: Works on all devices
-- **Low resource usage**: Minimal server requirements
+- **Serverless**: Scales automatically with traffic
 
 ## 🐛 Troubleshooting
 
@@ -124,7 +126,7 @@ subwaymap/
 3. Verify `/api/mta/feeds/all` returns data
 4. Check Network tab for failed requests
 
-## 📝 Data Sources
+## 📚 Data Sources
 
 - **Real-time**: [MTA GTFS-realtime feeds](https://api.mta.info/#/subwayRealTimeFeeds)
 - **Static**: [MTA GTFS static data](https://new.mta.info/developers)
@@ -136,7 +138,7 @@ subwaymap/
 3. Make your changes
 4. Submit a pull request
 
-## 📜 License
+## 📄 License
 
 MIT License - feel free to use this project!
 

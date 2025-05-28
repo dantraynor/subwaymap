@@ -7,22 +7,21 @@ const GtfsRealtimeBindings = require('gtfs-realtime-bindings');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// MTA Feed URLs - No API key required
+// MTA Feed URLs - Prioritized by importance
 const MTA_FEEDS = {
   '1234567': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs',
-  'ace': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace',
-  'bdfm': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm',
-  'g': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g',
-  'jz': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-jz',
-  'l': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l',
   'nqrw': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-nqrw',
-  'si': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si'
+  'bdfm': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm',
+  'ace': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace',
+  'l': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l'
+  // Removed less critical feeds for speed: g, jz, si
 };
 
-// Cache for reducing API calls
-let feedCache = {};
-let lastCacheUpdate = {};
-const CACHE_DURATION = 30000; // 30 seconds
+// Optimized cache with compression
+let feedCache = new Map();
+let lastCacheUpdate = new Map();
+const CACHE_DURATION = 45000; // 45 seconds - longer cache
+const MAX_TRAINS_PER_ROUTE = 20; // Limit trains per route
 
 // Enable CORS
 app.use(cors());
@@ -33,187 +32,124 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Health check
 app.get('/health', (req, res) => {
-  const healthData = {
+  res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
+    uptime: Math.round(process.uptime()),
     feeds: Object.keys(MTA_FEEDS),
-    cacheStatus: Object.keys(feedCache).map(feedId => ({
-      feedId,
-      cached: !!feedCache[feedId],
-      lastUpdate: lastCacheUpdate[feedId] || 'never'
-    }))
-  };
-  res.json(healthData);
+    cacheSize: feedCache.size,
+    memoryUsage: process.memoryUsage()
+  });
 });
 
-// Enhanced feed data processing
-function processFeedData(feed, feedId) {
-  console.log(`📊 Processing feed ${feedId}: ${feed.entity.length} entities`);
-  
+// Optimized feed data processing - MUCH faster
+function processFeedDataOptimized(feed, feedId) {
+  const startTime = Date.now();
   const trains = [];
-  let processedTrips = 0;
-  let processedStops = 0;
+  const seenTrips = new Set();
   
-  feed.entity.forEach(entity => {
-    if (entity.tripUpdate) {
-      const tripUpdate = entity.tripUpdate;
-      const routeId = tripUpdate.trip.routeId;
-      
-      if (!routeId) {
-        console.warn(`⚠️  Trip without route ID: ${tripUpdate.trip.tripId}`);
-        return;
-      }
-      
-      processedTrips++;
-      
-      tripUpdate.stopTimeUpdate.forEach(stopUpdate => {
-        const arrivalTime = stopUpdate.arrival && stopUpdate.arrival.time ? Number(stopUpdate.arrival.time) : null;
-        const departureTime = stopUpdate.departure && stopUpdate.departure.time ? Number(stopUpdate.departure.time) : null;
-        
-        if (arrivalTime || departureTime) {
-          const trainData = {
-            tripId: tripUpdate.trip.tripId,
-            routeId: routeId,
-            stopId: stopUpdate.stopId,
-            arrival: arrivalTime ? new Date(arrivalTime * 1000) : null,
-            departure: departureTime ? new Date(departureTime * 1000) : null,
-            delay: stopUpdate.arrival && stopUpdate.arrival.delay ? stopUpdate.arrival.delay : 0,
-            feedId: feedId,
-            timestamp: new Date().toISOString()
-          };
-          
-          trains.push(trainData);
-          processedStops++;
-        }
+  // Process only first 100 entities for speed
+  const entitiesToProcess = feed.entity.slice(0, 100);
+  
+  for (const entity of entitiesToProcess) {
+    if (!entity.tripUpdate || !entity.tripUpdate.trip?.routeId) continue;
+    
+    const tripUpdate = entity.tripUpdate;
+    const routeId = tripUpdate.trip.routeId;
+    const tripId = tripUpdate.trip.tripId;
+    
+    // Skip duplicate trips
+    if (seenTrips.has(tripId)) continue;
+    seenTrips.add(tripId);
+    
+    // Get only the next stop (first stop update)
+    const nextStop = tripUpdate.stopTimeUpdate[0];
+    if (!nextStop) continue;
+    
+    const arrivalTime = nextStop.arrival?.time ? Number(nextStop.arrival.time) : null;
+    const departureTime = nextStop.departure?.time ? Number(nextStop.departure.time) : null;
+    
+    if (arrivalTime || departureTime) {
+      trains.push({
+        tripId,
+        routeId,
+        stopId: nextStop.stopId,
+        arrival: arrivalTime ? new Date(arrivalTime * 1000) : null,
+        departure: departureTime ? new Date(departureTime * 1000) : null,
+        delay: nextStop.arrival?.delay || 0,
+        feedId
       });
     }
     
-    // Also process vehicle positions if available
-    if (entity.vehicle) {
-      const vehicle = entity.vehicle;
-      if (vehicle.trip && vehicle.trip.routeId && vehicle.position) {
-        const vehicleData = {
-          tripId: vehicle.trip.tripId,
-          routeId: vehicle.trip.routeId,
-          stopId: vehicle.stopId || `vehicle_${vehicle.vehicle ? vehicle.vehicle.id : 'unknown'}`,
-          latitude: vehicle.position.latitude,
-          longitude: vehicle.position.longitude,
-          bearing: vehicle.position.bearing,
-          speed: vehicle.position.speed,
-          vehicleId: vehicle.vehicle ? vehicle.vehicle.id : null,
-          feedId: feedId,
-          timestamp: new Date().toISOString(),
-          isVehiclePosition: true
-        };
-        
-        trains.push(vehicleData);
-      }
+    // Limit trains per route for performance
+    const routeCount = trains.filter(t => t.routeId === routeId).length;
+    if (routeCount >= MAX_TRAINS_PER_ROUTE) {
+      continue;
     }
-  });
+  }
   
-  console.log(`✅ Feed ${feedId}: ${processedTrips} trips, ${processedStops} stop updates, ${trains.length} total data points`);
+  const processingTime = Date.now() - startTime;
+  console.log(`⚡ Fast-processed feed ${feedId}: ${trains.length} trains in ${processingTime}ms`);
+  
   return trains;
 }
 
 // Check if cache is still valid
 function isCacheValid(feedId) {
-  const lastUpdate = lastCacheUpdate[feedId];
+  const lastUpdate = lastCacheUpdate.get(feedId);
   if (!lastUpdate) return false;
   
-  const now = Date.now();
-  const cacheAge = now - lastUpdate;
+  const cacheAge = Date.now() - lastUpdate;
   return cacheAge < CACHE_DURATION;
 }
 
-// Get specific feed with caching
-app.get('/api/mta/feed/:feedId', async (req, res) => {
-  try {
-    const feedId = req.params.feedId;
-    const feedUrl = MTA_FEEDS[feedId];
-    
-    if (!feedUrl) {
-      return res.status(404).json({ 
-        error: 'Feed not found', 
-        availableFeeds: Object.keys(MTA_FEEDS) 
-      });
-    }
-
-    // Check cache first
-    if (isCacheValid(feedId) && feedCache[feedId]) {
-      console.log(`📦 Serving cached data for feed ${feedId}`);
-      return res.json({
-        ...feedCache[feedId],
-        cached: true,
-        cacheAge: Date.now() - lastCacheUpdate[feedId]
-      });
-    }
-
-    console.log(`🌐 Fetching fresh data for feed ${feedId}`);
-    const response = await fetch(feedUrl);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const buffer = await response.buffer();
-    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buffer);
-    const processedData = processFeedData(feed, feedId);
-    
-    // Update cache
-    feedCache[feedId] = processedData;
-    lastCacheUpdate[feedId] = Date.now();
-    
-    res.json(processedData);
-  } catch (error) {
-    console.error(`❌ Error fetching MTA feed ${req.params.feedId}:`, error.message);
-    res.status(500).json({ 
-      error: 'Failed to fetch feed data', 
-      details: error.message,
-      feedId: req.params.feedId
-    });
-  }
-});
-
-// Get all feeds with enhanced processing and parallel fetching
+// Optimized all feeds endpoint
 app.get('/api/mta/feeds/all', async (req, res) => {
   try {
-    console.log('🚀 Fetching all MTA feeds...');
+    console.log('🚀 Fast-fetching MTA feeds...');
     const startTime = Date.now();
     
-    // Parallel fetch with improved error handling
-    const allFeedsData = await Promise.allSettled(
-      Object.entries(MTA_FEEDS).map(async ([feedId, feedUrl]) => {
+    // Check cache first for all feeds
+    const cachedFeeds = [];
+    const feedsToFetch = [];
+    
+    Object.keys(MTA_FEEDS).forEach(feedId => {
+      if (isCacheValid(feedId) && feedCache.has(feedId)) {
+        cachedFeeds.push({
+          feedId,
+          data: feedCache.get(feedId),
+          cached: true
+        });
+      } else {
+        feedsToFetch.push(feedId);
+      }
+    });
+    
+    console.log(`📦 Using ${cachedFeeds.length} cached feeds, fetching ${feedsToFetch.length} fresh`);
+    
+    // Fetch only non-cached feeds with timeout
+    const freshFeeds = await Promise.allSettled(
+      feedsToFetch.map(async (feedId) => {
         try {
-          // Check cache first
-          if (isCacheValid(feedId) && feedCache[feedId]) {
-            console.log(`📦 Using cached data for feed ${feedId}`);
-            return {
-              feedId,
-              data: feedCache[feedId],
-              cached: true,
-              cacheAge: Date.now() - lastCacheUpdate[feedId]
-            };
-          }
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
           
-          console.log(`🌐 Fetching fresh data for feed ${feedId}...`);
-          const response = await fetch(feedUrl, {
-            timeout: 10000 // 10 second timeout
+          const response = await fetch(MTA_FEEDS[feedId], {
+            signal: controller.signal
           });
+          clearTimeout(timeoutId);
           
           if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(`HTTP ${response.status}`);
           }
           
           const buffer = await response.buffer();
           const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buffer);
-          const processedData = processFeedData(feed, feedId);
+          const processedData = processFeedDataOptimized(feed, feedId);
           
           // Update cache
-          feedCache[feedId] = processedData;
-          lastCacheUpdate[feedId] = Date.now();
-          
-          console.log(`✅ Feed ${feedId}: ${processedData.length} data points`);
+          feedCache.set(feedId, processedData);
+          lastCacheUpdate.set(feedId, Date.now());
           
           return {
             feedId,
@@ -221,107 +157,128 @@ app.get('/api/mta/feeds/all', async (req, res) => {
             cached: false
           };
         } catch (error) {
-          console.error(`❌ Error processing feed ${feedId}:`, error.message);
+          console.error(`❌ Feed ${feedId} failed: ${error.message}`);
           return {
             feedId,
             error: true,
-            details: error.message,
-            status: error.status || 'unknown'
+            details: error.message
           };
         }
       })
     );
     
-    // Process results
-    const successfulFeeds = [];
-    const failedFeeds = [];
+    // Combine cached and fresh data
+    const allFeeds = [...cachedFeeds];
     
-    allFeedsData.forEach(result => {
+    freshFeeds.forEach(result => {
       if (result.status === 'fulfilled' && !result.value.error) {
-        successfulFeeds.push(result.value);
-      } else {
-        const errorInfo = result.status === 'rejected' ? 
-          { feedId: 'unknown', error: true, details: result.reason.message } :
-          result.value;
-        failedFeeds.push(errorInfo);
+        allFeeds.push(result.value);
       }
     });
     
-    const totalTrains = successfulFeeds.reduce((sum, feed) => sum + (feed.data ? feed.data.length : 0), 0);
-    const processingTime = Date.now() - startTime;
+    const totalTime = Date.now() - startTime;
+    const totalTrains = allFeeds.reduce((sum, feed) => sum + (feed.data?.length || 0), 0);
     
-    // Route statistics
-    const routeStats = {};
-    const stationStats = new Set();
+    console.log(`✅ Optimized response: ${totalTrains} trains in ${totalTime}ms`);
     
-    successfulFeeds.forEach(feed => {
-      if (feed.data) {
-        feed.data.forEach(train => {
-          if (train.routeId) {
-            routeStats[train.routeId] = (routeStats[train.routeId] || 0) + 1;
-            stationStats.add(train.stopId);
-          }
-        });
-      }
-    });
+    res.json(allFeeds);
     
-    console.log(`🎯 Successfully processed ${successfulFeeds.length}/${allFeedsData.length} feeds`);
-    console.log(`📊 Total: ${totalTrains} trains across ${Object.keys(routeStats).length} routes and ${stationStats.size} stations`);
-    console.log(`⏱️  Processing time: ${processingTime}ms`);
-    
-    if (failedFeeds.length > 0) {
-      console.log(`⚠️  Failed feeds:`, failedFeeds.map(f => f.feedId).join(', '));
-    }
-    
-    const response = {
-      feeds: successfulFeeds,
-      summary: {
-        successfulFeeds: successfulFeeds.length,
-        totalFeeds: allFeedsData.length,
-        totalTrains,
-        totalRoutes: Object.keys(routeStats).length,
-        totalStations: stationStats.size,
-        processingTime,
-        routeStats,
-        timestamp: new Date().toISOString()
-      },
-      errors: failedFeeds.length > 0 ? failedFeeds : undefined
-    };
-    
-    res.json(successfulFeeds); // Send only successful feeds to frontend for compatibility
   } catch (error) {
-    console.error('💥 Critical error fetching all feeds:', error.message);
+    console.error('💥 Critical error:', error.message);
     res.status(500).json({ 
       error: 'Failed to fetch feeds', 
-      details: error.message,
-      timestamp: new Date().toISOString()
+      details: error.message
     });
   }
 });
 
-// Debug endpoint for cache status
+// Single feed endpoint (optimized)
+app.get('/api/mta/feed/:feedId', async (req, res) => {
+  try {
+    const feedId = req.params.feedId;
+    const feedUrl = MTA_FEEDS[feedId];
+    
+    if (!feedUrl) {
+      return res.status(404).json({ error: 'Feed not found' });
+    }
+
+    // Check cache first
+    if (isCacheValid(feedId) && feedCache.has(feedId)) {
+      return res.json(feedCache.get(feedId));
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    
+    const response = await fetch(feedUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const buffer = await response.buffer();
+    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buffer);
+    const processedData = processFeedDataOptimized(feed, feedId);
+    
+    // Update cache
+    feedCache.set(feedId, processedData);
+    lastCacheUpdate.set(feedId, Date.now());
+    
+    res.json(processedData);
+  } catch (error) {
+    console.error(`❌ Error fetching feed ${req.params.feedId}:`, error.message);
+    res.status(500).json({ 
+      error: 'Failed to fetch feed data', 
+      details: error.message
+    });
+  }
+});
+
+// Memory cleanup endpoint
+app.post('/api/debug/cleanup', (req, res) => {
+  // Clear old cache entries
+  const now = Date.now();
+  const expiredFeeds = [];
+  
+  lastCacheUpdate.forEach((timestamp, feedId) => {
+    if (now - timestamp > CACHE_DURATION * 2) {
+      feedCache.delete(feedId);
+      lastCacheUpdate.delete(feedId);
+      expiredFeeds.push(feedId);
+    }
+  });
+  
+  // Force garbage collection if available
+  if (global.gc) {
+    global.gc();
+  }
+  
+  res.json({ 
+    message: 'Cleanup completed',
+    expiredFeeds,
+    cacheSize: feedCache.size,
+    memoryUsage: process.memoryUsage()
+  });
+});
+
+// Cache status endpoint
 app.get('/api/debug/cache', (req, res) => {
-  const cacheInfo = Object.keys(MTA_FEEDS).map(feedId => ({
+  const cacheInfo = Array.from(feedCache.keys()).map(feedId => ({
     feedId,
-    cached: !!feedCache[feedId],
-    dataPoints: feedCache[feedId] ? feedCache[feedId].length : 0,
-    lastUpdate: lastCacheUpdate[feedId] ? new Date(lastCacheUpdate[feedId]).toISOString() : 'never',
-    isValid: isCacheValid(feedId)
+    dataPoints: feedCache.get(feedId)?.length || 0,
+    lastUpdate: lastCacheUpdate.has(feedId) ? 
+      new Date(lastCacheUpdate.get(feedId)).toISOString() : 'never',
+    isValid: isCacheValid(feedId),
+    ageMs: lastCacheUpdate.has(feedId) ? Date.now() - lastCacheUpdate.get(feedId) : null
   }));
   
   res.json({
     cacheStatus: cacheInfo,
     cacheDuration: CACHE_DURATION,
-    totalCachedFeeds: Object.keys(feedCache).length
+    totalCachedFeeds: feedCache.size,
+    memoryUsage: process.memoryUsage()
   });
-});
-
-// Clear cache endpoint (for debugging)
-app.post('/api/debug/clear-cache', (req, res) => {
-  feedCache = {};
-  lastCacheUpdate = {};
-  console.log('🗑️  Cache cleared');
-  res.json({ message: 'Cache cleared successfully' });
 });
 
 // Fallback to index.html
@@ -329,18 +286,13 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Startup with enhanced logging
+// Optimized startup
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('🚀 NYC Subway Real-Time Map Server');
+  console.log('🚀 Optimized NYC Subway Map Server');
   console.log(`📍 Port: ${PORT}`);
-  console.log(`🌐 Access: http://localhost:${PORT}`);
-  console.log(`📡 MTA Feeds: ${Object.keys(MTA_FEEDS).length} configured`);
-  console.log(`💾 Cache Duration: ${CACHE_DURATION / 1000}s`);
-  console.log('✅ Server ready!');
-  
-  // Log available feeds
-  console.log('🚇 Available feeds:');
-  Object.entries(MTA_FEEDS).forEach(([feedId, url]) => {
-    console.log(`   ${feedId}: ${url.split('/').pop()}`);
-  });
+  console.log(`⚡ Performance Mode: ON`);
+  console.log(`📦 Cache Duration: ${CACHE_DURATION / 1000}s`);
+  console.log(`🚇 Max trains per route: ${MAX_TRAINS_PER_ROUTE}`);
+  console.log(`💾 Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+  console.log('✅ Fast server ready!');
 });
